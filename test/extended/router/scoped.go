@@ -65,11 +65,13 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:route.openshift.io]",
 
 	g.Describe("The HAProxy router", func() {
 		g.It("should serve the correct routes when scoped to a single namespace and label set", func() {
+			defaultPemData, err := generateRouterPem(2048)
+			o.Expect(err).NotTo(o.HaveOccurred())
 
 			routerPod := createScopedRouterPod(routerImage, "test-scoped", defaultPemData, "true")
 			g.By("creating a router")
 			ns := oc.KubeFramework().Namespace.Name
-			_, err := oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
+			_, err = oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			execPod := exutil.CreateExecPodOrFail(oc.AdminKubeClient(), ns, "execpod")
@@ -111,10 +113,11 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:route.openshift.io]",
 
 		g.It("should override the route host with a custom value", func() {
 
-			routerPod := createOverrideRouterPod(routerImage)
+			routerPod, err := createOverrideRouterPod(routerImage)
+			o.Expect(err).NotTo(o.HaveOccurred())
 			g.By("creating a router")
 			ns := oc.KubeFramework().Namespace.Name
-			_, err := oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
+			_, err = oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			execPod := exutil.CreateExecPodOrFail(oc.AdminKubeClient(), ns, "execpod")
@@ -175,10 +178,11 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:route.openshift.io]",
 
 		g.It("should override the route host for overridden domains with a custom value [apigroup:image.openshift.io]", func() {
 
-			routerPod := createOverrideDomainRouterPod(routerImage)
+			routerPod, err := createOverrideDomainRouterPod(routerImage)
+			o.Expect(err).NotTo(o.HaveOccurred())
 			g.By("creating a router")
 			ns := oc.KubeFramework().Namespace.Name
-			_, err := oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
+			_, err = oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			execPod := exutil.CreateExecPodOrFail(oc.AdminKubeClient(), ns, "execpod")
@@ -339,7 +343,11 @@ func ingressForName(r *routev1.Route, name string) *routev1.RouteIngress {
 	return nil
 }
 
-func createOverrideRouterPod(routerImage string) *corev1.Pod {
+func createOverrideRouterPod(routerImage string) (*corev1.Pod, error) {
+	defaultPemData, err := generateRouterPem(2048)
+	if err != nil {
+		return nil, err
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "router-override",
@@ -402,10 +410,14 @@ func createOverrideRouterPod(routerImage string) *corev1.Pod {
 				},
 			},
 		},
-	}
+	}, nil
 }
 
-func createOverrideDomainRouterPod(routerImage string) *corev1.Pod {
+func createOverrideDomainRouterPod(routerImage string) (*corev1.Pod, error) {
+	defaultPemData, err := generateRouterPem(2048)
+	if err != nil {
+		return nil, err
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "router-override-domains",
@@ -468,5 +480,5 @@ func createOverrideDomainRouterPod(routerImage string) *corev1.Pod {
 				},
 			},
 		},
-	}
+	}, nil
 }

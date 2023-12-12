@@ -55,11 +55,13 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:route.openshift.io]",
 
 	g.Describe("The HAProxy router", func() {
 		g.It("should run even if it has no access to update status [apigroup:image.openshift.io]", func() {
+			defaultPemData, err := generateRouterPem(2048)
+			o.Expect(err).NotTo(o.HaveOccurred())
 
 			routerPod := createScopedRouterPod(routerImage, "test-unprivileged", defaultPemData, "false")
 			g.By("creating a router")
 			ns := oc.KubeFramework().Namespace.Name
-			_, err := oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
+			_, err = oc.AdminKubeClient().CoreV1().Pods(ns).Create(context.Background(), routerPod, metav1.CreateOptions{})
 			o.Expect(err).NotTo(o.HaveOccurred())
 
 			execPod := exutil.CreateExecPodOrFail(oc.AdminKubeClient(), ns, "execpod")

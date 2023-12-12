@@ -174,6 +174,9 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:image.openshift.io]",
 		}
 
 		g.By("creating route Pods")
+		defaultPemData, err := generateRouterPem(2048)
+		o.Expect(err).NotTo(o.HaveOccurred())
+
 		routerPods := []corev1.Pod{
 			{
 				ObjectMeta: metav1.ObjectMeta{
