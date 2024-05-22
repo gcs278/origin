@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -396,8 +397,118 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:route.openshift.io]",
 			o.Expect(writes).To(o.BeNumerically(">=", 1))
 			o.Expect(writes).To(o.BeNumerically("<=", 5))
 		})
+
+		g.It("handles a consistent write conflict", func() {
+			g.By("deploying a scaled out namespace scoped router that adds the UnservableInFutureVersions condition")
+
+			g.By("creating multiple routes")
+			numOfRoutes := 20
+			client := routeclientset.NewForConfigOrDie(oc.AdminConfig()).RouteV1().Routes(ns)
+			err := createTestRoutes(client, numOfRoutes)
+			o.Expect(err).NotTo(o.HaveOccurred())
+
+			ctx, cancel := context.WithCancel(context.Background())
+
+			go conflictWrite(ctx, client, "19", 1*time.Minute)
+			defer cancel()
+
+			routerName := "conflicting"
+			rsAdd, err := oc.KubeClient().AppsV1().ReplicaSets(ns).Create(
+				context.Background(),
+				scaledRouter(
+					"router",
+					routerImage,
+					[]string{
+						"-v=5",
+						fmt.Sprintf("--namespace=%s", ns),
+						// Make resync interval high to avoid contention flushes.
+						"--resync-interval=24h",
+						fmt.Sprintf("--name=%s", routerName),
+					},
+				),
+				metav1.CreateOptions{},
+			)
+			o.Expect(err).NotTo(o.HaveOccurred())
+			err = waitForReadyReplicaSet(oc.KubeClient(), ns, rsAdd.Name)
+			o.Expect(err).NotTo(o.HaveOccurred())
+
+			g.By("waiting for sufficient routes to have Admitted status condition")
+			startTime := time.Now()
+			err = wait.PollUntilContextTimeout(context.Background(), 10*time.Second, 30*time.Minute, false, func(ctx context.Context) (bool, error) {
+				routes, err := client.List(ctx, metav1.ListOptions{})
+				if err != nil {
+					e2e.Logf("failed to list routes: %v", err)
+					return false, nil
+				}
+				o.Expect(routes.Items).To(o.HaveLen(numOfRoutes))
+				admittedCondition := 0
+				for _, route := range routes.Items {
+					ingress := findIngress(&route, routerName)
+					if ingress == nil {
+						continue
+					}
+					// Find Admitted condition.
+					if cond := findIngressCondition(ingress, routev1.RouteAdmitted); cond != nil {
+						admittedCondition++
+						o.Expect(ingress.Host).NotTo(o.BeEmpty())
+						o.Expect(ingress.Conditions).NotTo(o.BeEmpty())
+						o.Expect(cond.LastTransitionTime).NotTo(o.BeNil())
+						o.Expect(cond.Status).To(o.Equal(corev1.ConditionTrue))
+					}
+				}
+				// Wait for both conditions to be on all routes.
+				if admittedCondition != numOfRoutes {
+					e2e.Logf("waiting for %d conditions for %q, got Admitted=%d", numOfRoutes, routerName, admittedCondition)
+					return false, nil
+				}
+				outputIngress(routes.Items...)
+				return true, nil
+			})
+			o.Expect(err).NotTo(o.HaveOccurred())
+			elapsed := time.Since(startTime)
+			e2e.Logf("router took %s to update %d routes.\n", elapsed, numOfRoutes)
+		})
 	})
 })
+
+func conflictWrite(parentCtx context.Context, client v1.RouteInterface, routeName string, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+	defer cancel()
+
+	conflictLabel := "conflict-label-counter"
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Loop stopped due to context cancellation")
+			return
+		default:
+			// Perform your repetitive task here
+			route9, err := client.Get(context.Background(), routeName, metav1.GetOptions{})
+			if err != nil {
+				continue
+			}
+			if route9.Labels == nil {
+				route9.Labels = map[string]string{}
+			}
+			count, ok := route9.Labels[conflictLabel]
+			if ok {
+				countInt, _ := strconv.Atoi(count)
+				countInt += 1
+				route9.Labels[conflictLabel] = strconv.Itoa(countInt)
+			} else {
+				route9.Labels[conflictLabel] = "0"
+			}
+			_, err = client.Update(ctx, route9, metav1.UpdateOptions{})
+			if err != nil {
+				e2e.Logf("updated failed: %v", err)
+			} else {
+				e2e.Logf("updated route %s count %s", routeName, count)
+			}
+
+		}
+	}
+
+}
 
 // waitForRouteStatusUpdates waits for an observation time, then calls the context.CancelFunc,
 // and receives the update count from the provided channel.
