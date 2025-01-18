@@ -76,22 +76,7 @@ var _ = g.Describe("[sig-network][Feature:Router][apigroup:route.openshift.io]",
 			RoleRef: rbacv1.RoleRef{
 				Kind: "ClusterRole",
 				Name: "system:router",
-			},
-		}, metav1.CreateOptions{})
-		// In order to start HAProxy, so that the readiness probe will work, the router needs anyuid.
-		_, err = oc.AdminKubeClient().RbacV1().RoleBindings(ns).Create(context.Background(), &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "router-anyuid",
-			},
-			Subjects: []rbacv1.Subject{
-				{
-					Kind: "ServiceAccount",
-					Name: "default",
-				},
-			},
-			RoleRef: rbacv1.RoleRef{
-				Kind: "ClusterRole",
-				Name: "system:openshift:scc:anyuid",
+				//Name: "openshift-ingress-router",
 			},
 		}, metav1.CreateOptions{})
 		o.Expect(err).NotTo(o.HaveOccurred())
@@ -550,6 +535,7 @@ func removeIngressCondition(ingress *routev1.RouteIngress, t routev1.RouteIngres
 func scaledRouter(name, image string, args []string) *appsv1.ReplicaSet {
 	one := int64(1)
 	scale := int32(3)
+	runAsNonRoot := true
 	return &appsv1.ReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -584,6 +570,24 @@ func scaledRouter(name, image string, args []string) *appsv1.ReplicaSet {
 									},
 								},
 								{
+									// Bind to a non-privileged HTTP port instead of 80.
+									Name:  "ROUTER_SERVICE_HTTP_PORT",
+									Value: "8080",
+								},
+								{
+									// Bind to a non-privileged HTTPS port instead of 443.
+									Name:  "ROUTER_SERVICE_HTTPS_PORT",
+									Value: "8443",
+								},
+								{
+									Name: "POD_NAMESPACE",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.namespace",
+										},
+									},
+								},
+								{
 									// This is only required because default_pub_keys.pem is the router uses a SHA1
 									// signature algorithm and an RSA 1024 byte key, so we must specify a valid default
 									// certificate. See https://github.com/openshift/router/pull/646
@@ -606,6 +610,19 @@ func scaledRouter(name, image string, args []string) *appsv1.ReplicaSet {
 									HTTPGet: &corev1.HTTPGetAction{
 										Path: "/healthz/ready",
 										Port: intstr.FromInt32(1936),
+									},
+								},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								RunAsNonRoot: &runAsNonRoot,
+								Capabilities: &corev1.Capabilities{
+									Add: []corev1.Capability{
+										// Although we aren't binding to privileged ports, this capability is still
+										// required because the HAProxy binary has NET_BIND_SERVICE applied via setcap.
+										"NET_BIND_SERVICE",
+									},
+									Drop: []corev1.Capability{
+										"ALL",
 									},
 								},
 							},
